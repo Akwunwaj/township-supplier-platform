@@ -1,0 +1,204 @@
+
+version: '3.9'
+
+x-env: &env
+  env_file:
+    - ../.env
+
+networks:
+  tsm:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  mongo_data:
+  redis_data:
+  rabbitmq_data:
+  opensearch_data:
+  minio_data:
+
+services:
+  traefik:
+    image: traefik:v3.0
+    command:
+      - --api.dashboard=true
+      - --providers.docker=true
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --serversTransport.insecureSkipVerify=true
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [tsm]
+
+  postgres:
+    image: postgres:15
+    <<: *env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../database/postgres/init:/docker-entrypoint-initdb.d
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    networks: [tsm]
+
+  mongo:
+    image: mongo:6
+    <<: *env
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD}
+    volumes:
+      - mongo_data:/data/db
+    ports:
+      - "${MONGO_PORT}:27017"
+    networks: [tsm]
+
+  redis:
+    image: redis:7
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT}:6379"
+    volumes:
+      - redis_data:/data
+    networks: [tsm]
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks: [tsm]
+
+  opensearch:
+    image: opensearchproject/opensearch:2.14.0
+    environment:
+      - discovery.type=single-node
+      - plugins.security.disabled=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - "9200:9200"
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    networks: [tsm]
+
+  minio:
+    image: minio/minio:RELEASE.2024-12-18T20-57-28Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    networks: [tsm]
+
+  user-service:
+    build: ../backend/services/user-service
+    <<: *env
+    depends_on: [postgres]
+    networks: [tsm]
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.user.rule=PathPrefix(`/api/auth`) || PathPrefix(`/api/admin`) || PathPrefix(`/api/notifications/preferences`)
+      - traefik.http.routers.user.entrypoints=websecure
+      - traefik.http.routers.user.tls=true
+
+  product-service:
+    build: ../backend/services/product-service
+    <<: *env
+    depends_on: [mongo, redis, minio]
+    networks: [tsm]
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.product.rule=PathPrefix(`/api/products`) || PathPrefix(`/api/media`)
+      - traefik.http.routers.product.entrypoints=websecure
+      - traefik.http.routers.product.tls=true
+
+  order-service:
+    build: ../backend/services/order-service
+    <<: *env
+    depends_on: [postgres, rabbitmq]
+    networks: [tsm]
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.order.rule=PathPrefix(`/api/cart`) || PathPrefix(`/api/orders`)
+      - traefik.http.routers.order.entrypoints=websecure
+      - traefik.http.routers.order.tls=true
+
+  payment-service:
+    build: ../backend/services/payment-service
+    <<: *env
+    depends_on: [postgres, rabbitmq]
+    networks: [tsm]
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.payment.rule=PathPrefix(`/api/payments`)
+      - traefik.http.routers.payment.entrypoints=websecure
+      - traefik.http.routers.payment.tls=true
+
+  logistics-service:
+    build: ../backend/services/logistics-service
+    <<: *env
+    depends_on: [postgres, rabbitmq]
+    networks: [tsm]
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.logistics.rule=PathPrefix(`/api/ussd`) || PathPrefix(`/api/deliveries`) || PathPrefix(`/api/driver`) || PathPrefix(`/api/admin/deliveries`)
+      - traefik.http.routers.logistics.entrypoints=websecure
+      - traefik.http.routers.logistics.tls=true
+
+  analytics-service:
+    build: ../backend/services/analytics-service
+    <<: *env
+    depends_on: [postgres]
+    networks: [tsm]
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.analytics.rule=PathPrefix(`/api/analytics`)
+      - traefik.http.routers.analytics.entrypoints=websecure
+      - traefik.http.routers.analytics.tls=true
+
+  notification-service:
+    build: ../backend/services/notification-service
+    <<: *env
+    depends_on: [postgres]
+    networks: [tsm]
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.notification.rule=PathPrefix(`/api/notifications`)
+      - traefik.http.routers.notification.entrypoints=websecure
+      - traefik.http.routers.notification.tls=true
+
+  notification-worker:
+    build: ../backend/services/notification-service
+    <<: *env
+    depends_on: [rabbitmq, postgres]
+    networks: [tsm]
+    command: ["node","dist/worker.js"]
+
+  web-app:
+    build: ../frontend-web
+    depends_on: [user-service]
+    networks: [tsm]
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.web.rule=PathPrefix(`/`)
+      - traefik.http.routers.web.entrypoints=web
