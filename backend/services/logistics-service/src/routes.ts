@@ -54,6 +54,50 @@ router.put('/api/deliveries/:id/status', requireAuth, requireRole('driver','admi
   res.json({ ok:true });
 });
 
+// ---------- Retailer: deliveries list ----------
+router.get('/api/retailer/deliveries', requireAuth, requireRole('retailer'), async (req, res) => {
+  const retailerId = (req as any).user?.sub;
+
+  // Join deliveries to orders to ensure retailer only sees their own deliveries
+  const q = await pool.query(
+    `SELECT d.*
+     FROM deliveries d
+     JOIN orders o ON o.id = d.order_id
+     WHERE o.retailer_id = $1
+     ORDER BY d.delivered_at DESC NULLS LAST, d.scheduled_time DESC NULLS LAST, d.id DESC
+     LIMIT 200`,
+    [retailerId]
+  );
+
+  res.json({ items: q.rows });
+});
+
+// ---------- Retailer: delivery detail + tracking ----------
+router.get('/api/retailer/deliveries/:id', requireAuth, requireRole('retailer'), async (req, res) => {
+  const retailerId = (req as any).user?.sub;
+  const deliveryId = req.params.id;
+
+  // Verify ownership by joining orders
+  const d = await pool.query(
+    `SELECT d.*
+     FROM deliveries d
+     JOIN orders o ON o.id = d.order_id
+     WHERE d.id = $1 AND o.retailer_id = $2
+     LIMIT 1`,
+    [deliveryId, retailerId]
+  );
+
+  if (!d.rowCount) return res.status(404).json({ error: 'not found' });
+
+  const t = await pool.query(
+    'SELECT * FROM delivery_tracking WHERE delivery_id=$1 ORDER BY ts DESC',
+    [deliveryId]
+  );
+
+  res.json({ delivery: d.rows[0], tracking: t.rows });
+});
+
+
 // Driver: proof of delivery
 router.post('/api/deliveries/:id/pod', requireAuth, requireRole('driver','admin'), async (req,res)=>{
   const proof_json = req.body?.proof_json || req.body || {};

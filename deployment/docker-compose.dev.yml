@@ -1,5 +1,4 @@
-
-version: '3.9'
+version: "3.9"
 
 x-env: &env
   env_file:
@@ -161,7 +160,7 @@ services:
     networks: [tsm]
     labels:
       - traefik.enable=true
-      - traefik.http.routers.logistics.rule=PathPrefix(`/api/ussd`) || PathPrefix(`/api/deliveries`) || PathPrefix(`/api/driver`) || PathPrefix(`/api/admin/deliveries`)
+      - traefik.http.routers.logistics.rule=PathPrefix(`/api/ussd`) || PathPrefix(`/api/deliveries`) || PathPrefix(`/api/driver`) || PathPrefix(`/api/admin/deliveries`) || PathPrefix(`/api/retailer`)
       - traefik.http.routers.logistics.entrypoints=websecure
       - traefik.http.routers.logistics.tls=true
 
@@ -192,7 +191,7 @@ services:
     <<: *env
     depends_on: [rabbitmq, postgres]
     networks: [tsm]
-    command: ["node","dist/worker.js"]
+    command: ["node", "dist/worker.js"]
 
   web-app:
     build: ../frontend-web
